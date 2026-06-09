@@ -21,6 +21,13 @@ data "terraform_remote_state" "vpc" {
   }
 }
 
+locals {
+  # try() so this layer can still be planned/destroyed even if the 00-vpc layer
+  # has already been destroyed (its remote-state outputs would then be empty).
+  vpc_backend_subnet_id = try(data.terraform_remote_state.vpc.outputs.backend_subnet_id, null)
+  vpc_alb_subnet_id     = try(data.terraform_remote_state.vpc.outputs.alb_subnet_id, null)
+}
+
 module "weka_backend" {
   source = "../modules/weka-backend"
 
@@ -34,12 +41,12 @@ module "weka_backend" {
   get_weka_io_token = var.get_weka_io_token
 
   # AZ-a private subnet (single placement group); ALB needs a second AZ.
-  subnet_ids         = [data.terraform_remote_state.vpc.outputs.backend_subnet_id]
+  subnet_ids         = local.vpc_backend_subnet_id != null ? [local.vpc_backend_subnet_id] : []
   sg_ids             = var.sg_ids
   create_nat_gateway = var.create_nat_gateway
 
   create_alb               = var.create_alb
-  alb_additional_subnet_id = data.terraform_remote_state.vpc.outputs.alb_subnet_id
+  alb_additional_subnet_id = local.vpc_alb_subnet_id
 
   set_dedicated_fe_container = var.set_dedicated_fe_container
   data_services_number       = var.data_services_number

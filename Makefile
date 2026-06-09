@@ -76,7 +76,12 @@ clean-apps: kubeconfig ## Remove PostgreSQL + WEKA components (keep infra)
 
 destroy: clean-apps ## Destroy everything (apps, then EKS, backend, VPC)
 	terraform -chdir=$(TF_EKS) destroy -auto-approve
-	terraform -chdir=$(TF_BACKEND) destroy -auto-approve
+	# Retry the backend once: the WEKA EC2 placement group can fail to delete on
+	# the first pass with InvalidPlacementGroup.InUse while instances are still
+	# terminating. A second pass succeeds once they're gone.
+	terraform -chdir=$(TF_BACKEND) destroy -auto-approve || \
+		{ echo "Backend destroy retrying after instance termination..."; sleep 45; \
+		  terraform -chdir=$(TF_BACKEND) destroy -auto-approve; }
 	terraform -chdir=$(TF_VPC) destroy -auto-approve
 
 ## ---------------------------------------------------------------------------

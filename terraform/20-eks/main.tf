@@ -29,8 +29,11 @@ data "terraform_remote_state" "weka_backend" {
 }
 
 locals {
+  # try() throughout so this layer can still be planned/destroyed even if the
+  # 00-vpc / 10-weka-backend layers have already been destroyed (empty outputs).
+
   # EKS control plane spans both private subnets (multi-AZ requirement).
-  cluster_subnet_ids = data.terraform_remote_state.vpc.outputs.private_subnet_ids
+  cluster_subnet_ids = try(data.terraform_remote_state.vpc.outputs.private_subnet_ids, [])
 
   # Backend SGs let WEKA client containers reach the storage cluster
   # (port 14000 + the DPDK port range).
@@ -38,10 +41,10 @@ locals {
 
   # Pin the WEKA client node group to AZ-a (same placement group as the backend).
   # Other node groups (system) keep their declared/default subnets.
-  az_a_subnet = data.terraform_remote_state.vpc.outputs.backend_subnet_id
+  az_a_subnet = try(data.terraform_remote_state.vpc.outputs.backend_subnet_id, null)
   node_groups = {
     for k, v in var.node_groups :
-    k => k == "clients" ? merge(v, { subnet_ids = [local.az_a_subnet] }) : v
+    k => (k == "clients" && local.az_a_subnet != null) ? merge(v, { subnet_ids = [local.az_a_subnet] }) : v
   }
 }
 

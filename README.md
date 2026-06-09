@@ -141,9 +141,15 @@ memory limit, so reads hit storage and the comparison is **storage-bound**.
 make destroy    # removes apps, then EKS, backend, and VPC
 ```
 
-If a layer fails to destroy, run `terraform -chdir=terraform/<layer> destroy`
-directly. The WEKA backend defines a `pre_terraform_destroy_command` output if
-protocol gateways are enabled (not used here).
+`make destroy` retries the backend layer once, because the WEKA EC2 placement
+group can fail to delete on the first pass (`InvalidPlacementGroup.InUse`) while
+backend instances are still terminating; the retry succeeds once they're gone.
+
+The Terraform layers tolerate being destroyed out of order: each layer's
+references to another layer's `terraform_remote_state` are wrapped in `try()`, so
+a layer can still be planned/destroyed even if the layer it reads from is already
+gone. If a layer still fails to destroy, re-run
+`terraform -chdir=terraform/<layer> destroy` directly.
 
 ## Notes
 
