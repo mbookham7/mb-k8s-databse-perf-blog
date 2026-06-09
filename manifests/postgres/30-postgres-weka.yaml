@@ -1,0 +1,112 @@
+# PostgreSQL 16 backed by WEKA distributed storage via the WEKA CSI driver.
+# Identical to the standard deployment except for the StorageClass — so the
+# benchmark isolates storage as the only variable.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc-weka
+  namespace: benchmark
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # StorageClass created by scripts/deploy-weka.sh (manifests/weka/core/storageclass-weka.yaml).
+  storageClassName: storageclass-wekafs-dir-api
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-weka
+  namespace: benchmark
+spec:
+  replicas: 1
+  # RWO PVC + single replica: tear down the old pod before starting the new one
+  # (avoids Multi-Attach and CPU/memory surge deadlocks on the 2 client nodes).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres-weka
+  template:
+    metadata:
+      labels:
+        app: postgres-weka
+        benchmark-role: postgres
+    spec:
+      nodeSelector:
+        weka.io/supports-clients: "true"
+      tolerations:
+        - key: "weka.io/client"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    benchmark-role: postgres
+                topologyKey: kubernetes.io/hostname
+      # The WEKA CSI dir volume mounts root as mode 000 root:root; postgres runs
+      # as uid 999 and can't write it. Fix ownership/perms once as root before start.
+      initContainers:
+        - name: fix-perms
+          image: busybox:1.37.0
+          command: ["sh", "-c", "chown 999:999 /var/lib/postgresql/data && chmod 700 /var/lib/postgresql/data"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "benchmarkpw"
+            - name: POSTGRES_DB
+              value: "benchdb"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          args:
+            - "-c"
+            - "max_connections=200"
+            - "-c"
+            - "shared_buffers=4GB"
+            - "-c"
+            - "wal_buffers=64MB"
+            - "-c"
+            - "checkpoint_completion_target=0.9"
+            - "-c"
+            - "random_page_cost=1.1"
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: "2"
+              memory: 6Gi
+            limits:
+              memory: 8Gi
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-storage
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc-weka
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-weka-svc
+  namespace: benchmark
+spec:
+  selector:
+    app: postgres-weka
+  ports:
+    - port: 5432
+      targetPort: 5432

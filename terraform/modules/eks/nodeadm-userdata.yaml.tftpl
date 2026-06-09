@@ -1,0 +1,79 @@
+%{~ if false ~}
+nodeadm-userdata.yaml.tftpl
+
+Cloud-init MIME-multipart user data for EKS managed node groups.
+Rendered by templatefile() in modules/eks/main.tf and embedded in
+the launch template. AL2023's nodeadm parses MIME-multipart format
+and runs the shell + NodeConfig sections at boot before kubelet
+starts.
+
+Sections are conditional — only emitted when at least one of
+{hugepages_count > 0, enable_cpu_manager_static,
+cluster_dns_ip != null} is true. The templatefile() call itself
+is gated by the same condition (see modules/eks/main.tf).
+
+Interpolated variables: hugepages_count (number),
+enable_cpu_manager_static (bool), cpu_manager_reconcile_period
+(string), cluster_dns_ip (string|null).
+
+The hugepages logic here is intentionally duplicated by
+hyperpod-dedicated/lifecycle-scripts/configure-weka-hugepages.sh,
+which runs on HyperPod-managed nodes (different bootstrap path —
+HyperPod doesn't accept custom launch-template user data). Keep
+the two in sync if either changes.
+%{~ endif ~}
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+%{ if hugepages_count > 0 ~}
+--==MYBOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+# Configure hugepages before kubelet starts.
+# WEKA requires 2 MiB hugepages pre-allocated on the node.
+HUGEPAGES=${hugepages_count}
+
+echo "Configuring $HUGEPAGES hugepages (2 MiB each)..."
+echo "$HUGEPAGES" > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+
+# Persist across reboots via systemd oneshot
+cat > /etc/systemd/system/hugepages.service << EOF
+[Unit]
+Description=Configure Hugepages for WEKA
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo $HUGEPAGES > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable hugepages.service
+
+%{ endif ~}
+%{ if enable_cpu_manager_static || cluster_dns_ip != null ~}
+--==MYBOUNDARY==
+Content-Type: application/node.eks.aws
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  kubelet:
+    config:
+%{ if enable_cpu_manager_static ~}
+      cpuManagerPolicy: static
+      cpuManagerReconcilePeriod: ${cpu_manager_reconcile_period}
+%{ endif ~}
+%{ if cluster_dns_ip != null ~}
+      clusterDNS:
+        - ${cluster_dns_ip}
+%{ endif ~}
+
+%{ endif ~}
+--==MYBOUNDARY==--

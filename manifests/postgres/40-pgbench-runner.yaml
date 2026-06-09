@@ -1,0 +1,31 @@
+# Dedicated pgbench client pod. Lives on a WEKA client-class node in the same
+# namespace as both DBs so network latency is consistent across both targets.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pgbench-runner
+  namespace: benchmark
+  labels:
+    app: pgbench-runner
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    weka.io/supports-clients: "true"
+  tolerations:
+    - key: "weka.io/client"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+  containers:
+    - name: pgbench
+      image: postgres:16
+      command: ["sleep", "infinity"]
+      env:
+        - name: PGPASSWORD
+          value: "benchmarkpw"
+      resources:
+        requests:
+          cpu: "2"
+          memory: 1Gi
+        limits:
+          memory: 2Gi

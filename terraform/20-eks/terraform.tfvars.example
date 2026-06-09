@@ -1,0 +1,49 @@
+# Copy to terraform.tfvars. Subnets + the WEKA backend security group are
+# sourced automatically from the 00-vpc and 10-weka-backend remote state.
+
+region       = "us-west-2"
+cluster_name = "pg-weka-bench" # must match 00-vpc and 10-weka-backend
+
+# Optional: extra IAM role granted cluster-admin via an EKS Access Entry.
+# The principal that runs `terraform apply` already gets admin automatically.
+# admin_role_arn = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_xxxx"
+
+node_groups = {
+  # Untainted system pool: WEKA operator controller, EBS CSI controller, CoreDNS.
+  system = {
+    instance_types = ["m6i.large"]
+    desired_size   = 2
+    min_size       = 2
+    max_size       = 2
+    labels = {
+      "node-role" = "system"
+    }
+  }
+
+  # WEKA client pool — also where BOTH PostgreSQL instances + pgbench run, so the
+  # WEKA-vs-gp3 comparison uses identical hardware (storage is the only variable).
+  # c6i.4xlarge: 16 vCPU / 32 GiB, 8 physical cores with hyperthreading off.
+  clients = {
+    instance_types            = ["c6i.4xlarge"]
+    desired_size              = 2
+    min_size                  = 1
+    max_size                  = 4
+    imds_hop_limit_2          = true
+    enable_cpu_manager_static = true
+    disable_hyperthreading    = true
+    core_count                = 8
+    hugepages_count           = 2048 # 4 GiB — covers a 2-core WEKA client container
+    labels = {
+      "weka.io/supports-clients" = "true"
+    }
+    taints = [{
+      key    = "weka.io/client"
+      value  = "true"
+      effect = "NO_SCHEDULE"
+    }]
+  }
+}
+
+tags = {
+  Project = "pg-weka-bench"
+}

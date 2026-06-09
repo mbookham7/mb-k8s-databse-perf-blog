@@ -1,0 +1,14 @@
+# "Standard block storage" side of the benchmark: a well-provisioned gp3 volume
+# served by the EKS-managed aws-ebs-csi-driver addon (installed in terraform/20-eks).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard-block
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

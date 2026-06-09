@@ -1,0 +1,112 @@
+# PostgreSQL 16 backed by standard gp3 block storage.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc-standard
+  namespace: benchmark
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-block
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-standard
+  namespace: benchmark
+spec:
+  replicas: 1
+  # RWO PVC + single replica: tear down the old pod before starting the new one
+  # (avoids Multi-Attach and CPU/memory surge deadlocks on the 2 client nodes).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres-standard
+  template:
+    metadata:
+      labels:
+        app: postgres-standard
+        benchmark-role: postgres
+    spec:
+      # Run on WEKA client-class nodes so both DBs use identical hardware
+      # (storage is the only variable). Tolerate the client-node taint.
+      nodeSelector:
+        weka.io/supports-clients: "true"
+      tolerations:
+        - key: "weka.io/client"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      # Prefer to land the two PostgreSQL instances on different nodes so they
+      # don't contend for CPU/memory during the run.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    benchmark-role: postgres
+                topologyKey: kubernetes.io/hostname
+      # Match the WEKA deployment's init step so both pods are identical (no-op on gp3).
+      initContainers:
+        - name: fix-perms
+          image: busybox:1.37.0
+          command: ["sh", "-c", "chown 999:999 /var/lib/postgresql/data && chmod 700 /var/lib/postgresql/data"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "benchmarkpw"
+            - name: POSTGRES_DB
+              value: "benchdb"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          args:
+            - "-c"
+            - "max_connections=200"
+            - "-c"
+            - "shared_buffers=4GB"
+            - "-c"
+            - "wal_buffers=64MB"
+            - "-c"
+            - "checkpoint_completion_target=0.9"
+            - "-c"
+            - "random_page_cost=1.1"
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: "2"
+              memory: 6Gi
+            limits:
+              memory: 8Gi
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-storage
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc-standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-standard-svc
+  namespace: benchmark
+spec:
+  selector:
+    app: postgres-standard
+  ports:
+    - port: 5432
+      targetPort: 5432
